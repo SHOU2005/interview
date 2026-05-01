@@ -1,0 +1,1 @@
+"""InterviewIQ FastAPI application."""
