@@ -43,4 +43,5 @@ def health():
     return {"status": "ok"}
 
 
+os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uploads")
