@@ -21,7 +21,35 @@ os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
 async def lifespan(app: FastAPI):
     import app.db.models  # noqa: F401 – ensure all models registered
     Base.metadata.create_all(bind=engine)
+    _bootstrap_users()
     yield
+
+
+def _bootstrap_users():
+    from app.core.security import hash_password
+    from app.db.models import User, UserRole
+    from app.db.session import SessionLocal
+
+    with SessionLocal() as db:
+        admin_email = settings.BOOTSTRAP_ADMIN_EMAIL.lower()
+        if not db.query(User).filter(User.email == admin_email).first():
+            db.add(User(
+                email=admin_email,
+                name="Admin",
+                password_hash=hash_password(settings.BOOTSTRAP_ADMIN_PASSWORD),
+                role=UserRole.admin,
+            ))
+            db.commit()
+
+        student_email = "student@iilm.edu"
+        if not db.query(User).filter(User.email == student_email).first():
+            db.add(User(
+                email=student_email,
+                name="Test Student",
+                password_hash=hash_password("Shourya@001"),
+                role=UserRole.student,
+            ))
+            db.commit()
 
 
 app = FastAPI(title="InterviewIQ API", version="1.0.0", lifespan=lifespan)

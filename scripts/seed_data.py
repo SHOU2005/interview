@@ -622,7 +622,7 @@ def run():
                 User(
                     email=student_email,
                     name="Test Student",
-                    password_hash=hash_password("student123"),
+                    password_hash=hash_password("Shourya@001"),
                     role=UserRole.student,
                 )
             )

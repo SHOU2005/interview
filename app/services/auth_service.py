@@ -30,7 +30,7 @@ def hash_otp(code: str) -> str:
 
 def create_otp(db: Session, email: str, purpose: str = "signup") -> tuple[str, OtpCode]:
     settings = get_settings()
-    code = "001" if settings.DEBUG else f"{secrets.randbelow(900000) + 100000:06d}"
+    code = "0000" if settings.DEBUG else f"{secrets.randbelow(900000) + 100000:06d}"
     expires = datetime.now(timezone.utc) + timedelta(seconds=settings.OTP_EXPIRE_SECONDS)
     row = OtpCode(
         email=email.strip().lower(),
