@@ -1,4 +1,5 @@
 import logging
+import os
 import re
 import socket
 
@@ -9,32 +10,69 @@ from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-# AWS IPv6 prefix → Supabase pooler region (used to pick the right pooler endpoint)
-# Verified against AWS ip-ranges.json: da18=ap-southeast-1, da1a=ap-south-1
-_IPV6_TO_REGION = {
-    '2406:da18': 'ap-southeast-1',   # Singapore
-    '2406:da1a': 'ap-south-1',       # Mumbai
-    '2406:da14': 'ap-northeast-1',   # Tokyo
-    '2a05:d018': 'eu-west-1',        # Ireland
-    '2600:1f18': 'us-east-1',        # N. Virginia
-    '2600:1f1c': 'us-west-1',        # N. California
-}
-
 _SUPABASE_DIRECT_HOST = re.compile(r'^db\.([a-z0-9]+)\.supabase\.co$')
+
+_POOLER_REGIONS = [
+    'ap-southeast-1',
+    'ap-south-1',
+    'us-east-1',
+    'eu-west-1',
+    'us-west-1',
+    'ap-northeast-1',
+    'eu-central-1',
+    'sa-east-1',
+]
+
+
+def _find_pooler_region(ref: str) -> str:
+    """Find the Supabase pooler region that hosts this project.
+
+    Probes each regional pooler with a dummy password:
+      - "Tenant or user not found"  → wrong region, try next
+      - any other error (auth fail) → correct region
+    Set SUPABASE_REGION env var to skip probing entirely.
+    """
+    override = os.environ.get('SUPABASE_REGION', '').strip()
+    if override:
+        logger.info('Using SUPABASE_REGION override: %s', override)
+        return override
+
+    import psycopg2
+
+    for region in _POOLER_REGIONS:
+        host = f'aws-0-{region}.pooler.supabase.com'
+        try:
+            conn = psycopg2.connect(
+                host=host,
+                port=6543,
+                user=f'postgres.{ref}',
+                password='__probe__',
+                dbname='postgres',
+                connect_timeout=5,
+                sslmode='require',
+            )
+            conn.close()
+            logger.info('Supabase pooler region: %s', region)
+            return region
+        except psycopg2.OperationalError as exc:
+            msg = str(exc).lower()
+            if 'tenant' in msg or 'not found' in msg:
+                continue  # wrong region
+            # Auth failure or anything else means this region hosts the project
+            logger.info('Supabase pooler region: %s', region)
+            return region
+        except Exception:
+            continue
+
+    logger.warning('Could not detect Supabase pooler region; falling back to ap-southeast-1')
+    return 'ap-southeast-1'
 
 
 def _resolve_db_url(url: str) -> str:
-    """Convert a Supabase direct URL (IPv6-only) to the connection-pooler URL (IPv4).
-
-    Render and other providers without IPv6 support cannot reach the Supabase
-    direct host.  The pooler endpoint uses IPv4 and works everywhere.
-    If the direct host already has an IPv4 record the URL is returned unchanged.
-    """
-    # Lightweight manual parse to avoid re-encoding issues with urllib.parse
-    # Expected format: scheme://user:pass@host:port/dbname
+    """Convert a Supabase direct URL (IPv6-only) to the IPv4 connection-pooler URL."""
     try:
         scheme_end = url.index('://')
-        at_pos = url.rindex('@')          # last '@' — handles encoded '@' (%40) in password
+        at_pos = url.rindex('@')      # last '@' so encoded '%40' in password is safe
         host_start = at_pos + 1
         path_start = url.index('/', host_start)
         host_port = url[host_start:path_start]
@@ -48,43 +86,23 @@ def _resolve_db_url(url: str) -> str:
 
     ref = m.group(1)
 
-    # If IPv4 is available on the direct host, no conversion needed
+    # Direct host has IPv4 → no conversion needed
     try:
         socket.getaddrinfo(hostname, 5432, socket.AF_INET)
         return url
     except socket.gaierror:
-        pass  # IPv6-only — must use pooler
+        pass  # IPv6-only, must use pooler
 
-    # Allow explicit override via env var (e.g. SUPABASE_REGION=ap-southeast-1)
-    import os
-    region = os.environ.get('SUPABASE_REGION', '')
-
-    if not region:
-        # Detect region from the IPv6 address prefix
-        region = 'ap-southeast-1'  # sensible default (most Supabase free-tier projects)
-        try:
-            for _, _, _, _, addr in socket.getaddrinfo(hostname, 5432):
-                ip = addr[0].lower()
-                for prefix, r in _IPV6_TO_REGION.items():
-                    if ip.startswith(prefix + ':'):
-                        region = r
-                        break
-        except socket.gaierror:
-            pass
-
+    region = _find_pooler_region(ref)
     pooler_host = f'aws-0-{region}.pooler.supabase.com'
 
-    # Rewrite netloc: change username postgres → postgres.REF and host:port → pooler:6543
-    user_info = url[scheme_end + 3:at_pos]                # "user:pass"
-    # Supabase direct user is always "postgres"; pooler requires "postgres.REF"
+    user_info = url[scheme_end + 3:at_pos]
     new_user_info = re.sub(r'^([^:]+):', rf'postgres.{ref}:', user_info, count=1)
     scheme = url[:scheme_end]
     dbname = url[path_start:]
     pooler_url = f'{scheme}://{new_user_info}@{pooler_host}:6543{dbname}'
 
-    logger.warning(
-        'Supabase direct URL is IPv6-only; auto-switched to pooler %s:6543', pooler_host
-    )
+    logger.warning('Supabase direct URL is IPv6-only; switched to pooler %s:6543', pooler_host)
     return pooler_url
 
 
