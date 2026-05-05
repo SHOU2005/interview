@@ -1,6 +1,7 @@
 """InterviewIQ FastAPI entrypoint."""
 
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,7 +16,15 @@ from app.db.session import engine
 settings = get_settings()
 os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
 
-app = FastAPI(title="InterviewIQ API", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    import app.db.models  # noqa: F401 – ensure all models registered
+    Base.metadata.create_all(bind=engine)
+    yield
+
+
+app = FastAPI(title="InterviewIQ API", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -31,17 +40,9 @@ app.include_router(admin.router, prefix="/api/v1/admin", tags=["admin"])
 app.include_router(interview_ws.router, prefix="/api/v1/ws")
 
 
-@app.on_event("startup")
-def on_startup():
-    """Auto-create all tables (safe for SQLite local dev; no-op if already exist)."""
-    import app.db.models  # noqa: F401 – ensure all models registered
-    Base.metadata.create_all(bind=engine)
-
-
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
 
-os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uploads")
