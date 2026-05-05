@@ -10,13 +10,14 @@ from app.core.config import get_settings
 logger = logging.getLogger(__name__)
 
 # AWS IPv6 prefix → Supabase pooler region (used to pick the right pooler endpoint)
+# Verified against AWS ip-ranges.json: da18=ap-southeast-1, da1a=ap-south-1
 _IPV6_TO_REGION = {
-    '2406:da18': 'ap-south-1',
-    '2406:da1a': 'ap-southeast-1',
-    '2a05:d018': 'eu-west-1',
-    '2600:1f18': 'us-east-1',
-    '2600:1f1c': 'us-west-1',
-    '2406:da14': 'ap-northeast-1',
+    '2406:da18': 'ap-southeast-1',   # Singapore
+    '2406:da1a': 'ap-south-1',       # Mumbai
+    '2406:da14': 'ap-northeast-1',   # Tokyo
+    '2a05:d018': 'eu-west-1',        # Ireland
+    '2600:1f18': 'us-east-1',        # N. Virginia
+    '2600:1f1c': 'us-west-1',        # N. California
 }
 
 _SUPABASE_DIRECT_HOST = re.compile(r'^db\.([a-z0-9]+)\.supabase\.co$')
@@ -54,17 +55,22 @@ def _resolve_db_url(url: str) -> str:
     except socket.gaierror:
         pass  # IPv6-only — must use pooler
 
-    # Detect region from the IPv6 address prefix
-    region = 'ap-south-1'
-    try:
-        for _, _, _, _, addr in socket.getaddrinfo(hostname, 5432):
-            ip = addr[0].lower()
-            for prefix, r in _IPV6_TO_REGION.items():
-                if ip.startswith(prefix + ':'):
-                    region = r
-                    break
-    except socket.gaierror:
-        pass
+    # Allow explicit override via env var (e.g. SUPABASE_REGION=ap-southeast-1)
+    import os
+    region = os.environ.get('SUPABASE_REGION', '')
+
+    if not region:
+        # Detect region from the IPv6 address prefix
+        region = 'ap-southeast-1'  # sensible default (most Supabase free-tier projects)
+        try:
+            for _, _, _, _, addr in socket.getaddrinfo(hostname, 5432):
+                ip = addr[0].lower()
+                for prefix, r in _IPV6_TO_REGION.items():
+                    if ip.startswith(prefix + ':'):
+                        region = r
+                        break
+        except socket.gaierror:
+            pass
 
     pooler_host = f'aws-0-{region}.pooler.supabase.com'
 
