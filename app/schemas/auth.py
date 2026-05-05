@@ -7,7 +7,7 @@ class SignupRequest(BaseModel):
 
 class SignupVerifyRequest(BaseModel):
     email: EmailStr
-    otp: str = Field(..., min_length=4, max_length=10)
+    otp: str = Field(..., min_length=1, max_length=10)
     name: str = Field(..., min_length=1, max_length=255)
     password: str = Field(..., min_length=6, max_length=128)
 
